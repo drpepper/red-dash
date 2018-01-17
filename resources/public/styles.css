@@ -1,0 +1,11 @@
+body {
+  font-family: sans-serif;
+}
+
+.error {
+  background-color: #ff5722;
+}
+
+.ok {
+  background-color: #4caf50
+}
