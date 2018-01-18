@@ -6,67 +6,119 @@
             [org.httpkit.client :as http]
             [clojure.data.json :as json]
             [hiccup.core :refer :all]
-            [hiccup.page :refer :all]))
+            [hiccup.page :refer :all]
+            [clojure.core.async :refer [go-loop <! timeout]]
+            [clj-time.core :as t]
+            [clj-time.format :as f]))
 
-(def refresh-period 5) ; in seconds
+(def web-refresh-period 5) ; in seconds
+(def server-refresh-period 5) ; in seconds
+(def servers [{:name "RedMetrics-Main" :type :redmetrics :url "https://api.redmetrics.io"}
+              {:name "RedWire-Main" :type :redwire :url "https://redwire.io"}
+              {:name "RedMetrics-Backup" :type :redmetrics :url "http://api.redmetrics.crigamelab.org"}
+              {:name "RedWire-Backup" :type :redwire :url "http://redwire.crigamelab.org"}])
 
+
+; Maps each server name to a {:status, :down-since}
+(def server-statuses (atom {}))
+
+(def last-updated (atom nil))
+
+
+(def time-formatter (f/formatters :rfc822))
 
 (defn check-redmetrics-server [url]
   (let [{:keys [status body error]} @(http/get url)]
     (if error
-      "ERROR contacting host"
+        "ERROR contacting host"
       (try 
         (let [data (json/read-str body)] 
           (if (= "1" (get data "apiVersion"))
-            :ok
+              :ok
             "ERROR RedMetrics not returning valid data"))
-       (catch Exception e "ERROR parsing JSON")))))
+        (catch Exception e "ERROR parsing JSON")))))
 
 (defn check-redwire-server [base-url]
   (let [url (str base-url "/api/games?%7B%22id%22%3A%22count%22%7D")
-    {:keys [status body error]} @(http/get url)]
+        {:keys [status body error]} @(http/get url)]
     (if error
-      "ERROR contacting host"
+        "ERROR contacting host"
       (try 
         (let [data (json/read-str body)] 
           (if (contains? data "count")
-            :ok
+              :ok
             "ERROR RedWire not returning valid data"))
-       (catch Exception e "ERROR parsing JSON")))))
+        (catch Exception e "ERROR parsing JSON")))))
 
 (defn use-hiccup [handler]
   (fn [request] (-> (handler request) 
-    html
-    response/response
-    (response/content-type "text/html"))))
+                  html
+                  response/response
+                  (response/content-type "text/html"))))
 
-(defn server-block [redmetrics-url redwire-url]
-  (let [redmetrics-status (check-redmetrics-server redmetrics-url)
-    redwire-status (check-redwire-server redwire-url)]
-    [:div
-      [:h3 {:class (if (= :ok redmetrics-status) "ok" "error")} 
-        (str "RedMetrics @ " redmetrics-url ":  ") (if (= :ok redmetrics-status) "OK" redmetrics-status)]
-      [:h3 {:class (if (= :ok redwire-status) "ok" "error")} 
-        (str "RedWire @ " redwire-url ":  ") (if (= :ok redwire-status) "OK" redwire-status)]]))
+; Taken from https://stackoverflow.com/a/32511406 by user ma2s
+(defn time-ago [time]
+  (let [units [{:name "second" :limit 60 :in-second 1}
+               {:name "minute" :limit 3600 :in-second 60}
+               {:name "hour" :limit 86400 :in-second 3600}
+               {:name "day" :limit 604800 :in-second 86400}
+               {:name "week" :limit 2629743 :in-second 604800}
+               {:name "month" :limit 31556926 :in-second 2629743}
+               {:name "year" :limit nil :in-second 31556926}]
+        diff (t/in-seconds (t/interval time (t/now)))]
+    (if (< diff 5)
+        "just now"
+      (let [unit (first (drop-while #(or (>= diff (:limit %))
+                                      (not (:limit %))) 
+                                    units))]
+        (-> (/ diff (:in-second unit))
+          Math/floor
+          int
+          (#(str % " " (:name unit) (when (> % 1) "s") " ago")))))))
 
 (defn main-page [request]
   (html5 
-    [:head 
-      (include-css "styles.css")
-      [:meta {"http-equiv" "refresh" 
-        "content" (str refresh-period)}]]
-    [:body
-      [:h1 "RedDash"]
-      [:h2 "Main Server"]
-      (server-block "https://api.redmetrics.io" "https://redwire.io")
-      [:h2 "Backup Server"]
-      (server-block "http://api.redmetrics.crigamelab.org" "http://redwire.crigamelab.org")]))
-
+   [:head 
+    (include-css "styles.css")
+    [:meta {"http-equiv" "refresh" 
+            "content" (str web-refresh-period)}]]
+   [:body
+    [:h1 "RedDash"]
+    [:p (str "Last updated at " (f/unparse time-formatter (t/now)))]
+    (for [{:keys [name type url]} servers]
+      (let [{:keys [status]} (get @server-statuses name)]
+        [:h3 {:class (if (= :ok status) "ok" "error")}
+         (str name " @ " url ":  ") (if (= :ok status) "OK" status)]))]))
 
 (defroutes app-routes
   (GET "/" [] (use-hiccup main-page))
   (route/resources "/")
   (route/not-found "Not Found"))
+
+
+(defn update-server-statuses! []
+  (swap! server-statuses 
+         (fn [prev-server-statuses]
+           (into {} 
+                 (for [{:keys [name type url]} servers]
+                   (let [status (if (= type :redmetrics)
+                                    (check-redmetrics-server url)
+                                  (check-redwire-server url))]
+                     [name {:status status}])))))
+  (reset! last-updated (t/now)))
+
+(defn run-update-loop! []
+  (go-loop []
+           (<! (timeout (* 1000 server-refresh-period)))
+           (update-server-statuses!)
+           (recur)))
+
+(defn init! []
+  (run-update-loop!))
+
+(defn destroy! []
+  (prn "Stopping..."))
+
 
 (def app
   (wrap-defaults app-routes site-defaults))
