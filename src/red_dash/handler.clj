@@ -11,8 +11,8 @@
             [clj-time.core :as t]
             [clj-time.format :as f]))
 
-(def web-refresh-period 5) ; in seconds
-(def server-refresh-period 5) ; in seconds
+(def web-refresh-period 30) ; in seconds
+(def server-refresh-period 30) ; in seconds
 (def servers [{:name "RedMetrics-Main" :type :redmetrics :url "https://api.redmetrics.io"}
               {:name "RedWire-Main" :type :redwire :url "https://redwire.io"}
               {:name "RedMetrics-Backup" :type :redmetrics :url "http://api.redmetrics.crigamelab.org"}
@@ -84,7 +84,7 @@
             "content" (str web-refresh-period)}]]
    [:body
     [:h1 "RedDash"]
-    [:p (str "Last updated at " (f/unparse time-formatter (t/now)))]
+    [:p (str "Last updated at " (f/unparse time-formatter @last-updated))]
     (for [{:keys [name type url]} servers]
       (let [{:keys [status]} (get @server-statuses name)]
         [:h3 {:class (if (= :ok status) "ok" "error")}
@@ -103,7 +103,8 @@
                  (for [{:keys [name type url]} servers]
                    (let [status (if (= type :redmetrics)
                                     (check-redmetrics-server url)
-                                  (check-redwire-server url))]
+                                  (check-redwire-server url))
+                         prev-status (get-in prev-server-statuses [name :status])]
                      [name {:status status}])))))
   (reset! last-updated (t/now)))
 
