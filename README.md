@@ -18,9 +18,12 @@ To start a web server for the application, run:
 
     lein ring server
 
-To make an uberjar for easy deployment, run
+To make an uberjar for easy deployment, run:
 
     lein ring uberjar
+
+To run it with recent Java versions that don't bundle java.xml, use:
+
     java --add-modules java.xml.bind -jar target/red-dash-0.1.0-SNAPSHOT-standalone.jar
 
 

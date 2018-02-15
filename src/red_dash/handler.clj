@@ -27,16 +27,26 @@
 
 (def time-formatter (f/formatters :rfc822))
 
+; Old method: check status
+; (defn check-redmetrics-server [url]
+;   (let [{:keys [status body error]} @(http/get url)]
+;     (if error
+;         "ERROR contacting host"
+;       (try 
+;         (let [data (json/read-str body)] 
+;           (if (= "1" (get data "apiVersion"))
+;               :ok
+;             "ERROR RedMetrics not returning valid data"))
+;         (catch Exception e "ERROR parsing JSON")))))
+
+; New method: check error code of /v1/game
 (defn check-redmetrics-server [url]
-  (let [{:keys [status body error]} @(http/get url)]
+  (let [{:keys [status body error]} @(http/get (str url "/v1/game"))]
     (if error
         "ERROR contacting host"
-      (try 
-        (let [data (json/read-str body)] 
-          (if (= "1" (get data "apiVersion"))
-              :ok
-            "ERROR RedMetrics not returning valid data"))
-        (catch Exception e "ERROR parsing JSON")))))
+      (if (not= status 200)
+          "ERROR with status"
+        :ok)))) 
 
 (defn check-redwire-server [base-url]
   (let [url (str base-url "/api/games?%7B%22id%22%3A%22count%22%7D")
